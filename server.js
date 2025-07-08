@@ -203,6 +203,7 @@ fastify.get("/api/hit", async (request, reply) => {
   const [prediction, confidence] = predict_next(validResults, true);
   return {
     current_session: validResults[0].sid,
+    next_session: validResults[0].sid + 1,
     current_result: validResults[0].result,
     prediction,
     confidence,
