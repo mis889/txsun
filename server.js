@@ -1,7 +1,6 @@
 // server.js
 const Fastify = require("fastify");
 const WebSocket = require("ws");
-const { mean } = require("lodash");
 
 const fastify = Fastify({ logger: false });
 const PORT = process.env.PORT || 3003;
@@ -9,6 +8,10 @@ const PORT = process.env.PORT || 3003;
 let hitResults = [];
 let hitWS = null;
 let hitInterval = null;
+
+function mean(arr) {
+  return arr.reduce((a, b) => a + b, 0) / arr.length;
+}
 
 function connectHitWebSocket() {
   hitWS = new WebSocket("wss://mynygwais.hytsocesk.com/websocket");
@@ -64,8 +67,7 @@ function connectHitWebSocket() {
 connectHitWebSocket();
 
 const PREDICTION_HISTORY = [];
-let FORMULA_WEIGHTS = Array(100).fill(1);
-
+let FORMULA_WEIGHTS = Array(200).fill(1);
 const PATTERN_DATA = {};
 const SUNWIN_ALGORITHM = {};
 
