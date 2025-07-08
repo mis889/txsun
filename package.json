@@ -1,1 +1,13 @@
-fwefew
+{
+  "name": "sunwin-ws-api",
+  "version": "1.0.0",
+  "description": "Robot phân tích tài xỉu Sunwin",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "fastify": "^4.25.1",
+    "ws": "^8.13.0"
+  }
+}
