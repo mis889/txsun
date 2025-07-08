@@ -1,6 +1,7 @@
 // server.js
 const Fastify = require("fastify");
 const WebSocket = require("ws");
+const { mean } = require("lodash");
 
 const fastify = Fastify({ logger: false });
 const PORT = process.env.PORT || 3003;
@@ -9,15 +10,16 @@ let hitResults = [];
 let hitWS = null;
 let hitInterval = null;
 
-let FORMULA_WEIGHTS = Array(200).fill(1);
-let PREDICTION_HISTORY = [];
-
 function connectHitWebSocket() {
   hitWS = new WebSocket("wss://mynygwais.hytsocesk.com/websocket");
 
   hitWS.on("open", () => {
     const authPayload = [
-      1, "MiniGame", "", "", {
+      1,
+      "MiniGame",
+      "",
+      "",
+      {
         agentId: "1",
         accessToken: "1-87eb5bcde00a1f5b3de92664a0ff9f91",
         reconnect: true,
@@ -43,10 +45,10 @@ function connectHitWebSocket() {
           d3: item.d3,
           total: item.d1 + item.d2 + item.d3,
           result: item.d1 + item.d2 + item.d3 >= 11 ? "Tài" : "Xỉu",
-          dice: [item.d1, item.d2, item.d3]
+          dice: [item.d1, item.d2, item.d3],
         }));
       }
-    } catch {}
+    } catch (e) {}
   });
 
   hitWS.on("close", () => {
@@ -61,148 +63,159 @@ function connectHitWebSocket() {
 
 connectHitWebSocket();
 
-function analyze_patterns(last_results) {
-  if (last_results.length < 5) return [null, "Chưa đủ dữ liệu"];
+const PREDICTION_HISTORY = [];
+let FORMULA_WEIGHTS = Array(100).fill(1);
 
-  for (let window = 2; window <= 5; window++) {
+const PATTERN_DATA = {};
+const SUNWIN_ALGORITHM = {};
+
+function analyze_patterns(last_results) {
+  if (last_results.length < 5) return [null, "Chưa đủ dữ liệu phân tích"];
+  const detected_patterns = [];
+
+  for (let window = 2; window < 6; window++) {
     for (let start = 0; start <= last_results.length - window * 2; start++) {
-      const seq = last_results.slice(start, start + window);
-      const nextSeq = last_results.slice(start + window, start + window * 2);
-      if (seq.join() === nextSeq.join()) {
-        return [seq.at(-1), `Cầu tuần hoàn ${window}nút (${seq.join("-")})`];
+      const sequence = last_results.slice(start, start + window);
+      const next_sequence = last_results.slice(start + window, start + window * 2);
+      if (sequence.join() === next_sequence.join()) {
+        detected_patterns.push([sequence[sequence.length - 1], `Cầu tuần hoàn ${window}nút (${sequence.join("-")})`]);
       }
     }
   }
 
-  const short = last_results.slice(0, 6);
-  if (short.every(r => r === short[0])) return [short[0], "Cầu đặc biệt: Bệt dài"];
-  if (short.every((r, i, arr) => i === 0 || r !== arr[i - 1])) return [short[0] === "Xỉu" ? "Tài" : "Xỉu", "Cầu đặc biệt: Đảo đều"];
-  const ratioT = short.filter(r => r === "Tài").length / short.length;
-  if (ratioT > 0.7 || ratioT < 0.3) return [ratioT > 0.7 ? "Tài" : "Xỉu", "Cầu đặc biệt: Cầu nghiên"];
+  const special_patterns = {
+    "Bệt dài": (seq) => seq.length >= 5 && new Set(seq).size === 1,
+    "Đảo đều": (seq) => seq.length >= 4 && seq.every((v, i, arr) => i === 0 || v !== arr[i - 1]),
+    "Cầu nghiêng": (seq) => seq.length >= 5 && (seq.filter(x => x === "Tài").length / seq.length > 0.7 || seq.filter(x => x === "Xỉu").length / seq.length > 0.7)
+  };
 
-  return [null, "Không phát hiện cầu"];
+  for (let [name, fn] of Object.entries(special_patterns)) {
+    if (fn(last_results.slice(0, 6))) {
+      const pred = name.includes("Đảo") && last_results[0] === "Xỉu" ? "Tài" : last_results[0];
+      detected_patterns.push([pred, `Cầu đặc biệt: ${name}`]);
+    }
+  }
+  return detected_patterns[0] || [null, "Không phát hiện cầu rõ ràng"];
 }
 
 function analyze_big_streak(history) {
-  const seq = history.map(h => h.result);
-  let count = 1;
-  for (let i = 1; i < seq.length; i++) {
-    if (seq[i] === seq[i - 1]) count++;
+  let current_result = history[0]?.result;
+  let current_streak = 1;
+  for (let i = 1; i < history.length; i++) {
+    if (history[i].result === current_result) current_streak++;
     else break;
   }
-  if (count >= 4) return [seq[0], 85 + (count - 4) * 3];
+  if (current_streak >= 3) {
+    const last_total = history[0].total;
+    let confidence = current_result === "Tài"
+      ? (last_total >= 17 ? Math.min(95 + (current_streak - 3) * 5, 99) : Math.min(90 + (current_streak - 3) * 5, 98))
+      : (last_total <= 10 ? Math.min(95 + (current_streak - 3) * 5, 99) : Math.min(90 + (current_streak - 3) * 5, 98));
+    return [current_result, confidence];
+  }
+  return [null, 0];
+}
+
+function analyze_sum_trend(history) {
+  const last_sum = history[0].total;
+  const data = SUNWIN_ALGORITHM[last_sum.toString()];
+  if (data) {
+    if (data.tai === 100) return ["Tài", 95];
+    if (data.xiu === 100) return ["Xỉu", 95];
+    return [data.tai > data.xiu ? "Tài" : "Xỉu", Math.max(data.tai, data.xiu)];
+  }
+  return [null, 0];
+}
+
+function find_closest_pattern(current) {
+  return Object.keys(PATTERN_DATA).find((k) => current.endsWith(k));
+}
+
+function analyze_pattern_trend(history) {
+  const elements = history.slice(0, 15).map(s => s.result === "Tài" ? "t" : "x");
+  const current_pattern = elements.reverse().join("");
+  const closest = find_closest_pattern(current_pattern);
+  if (closest && PATTERN_DATA[closest]) {
+    const data = PATTERN_DATA[closest];
+    if (data.tai === data.xiu) {
+      return [history[0].total >= 11 ? "Tài" : "Xỉu", 55];
+    }
+    return [data.tai > data.xiu ? "Tài" : "Xỉu", Math.max(data.tai, data.xiu)];
+  }
   return [null, 0];
 }
 
 function predict_next(history, vip_mode = false) {
-  if (history.length < 5) return ["Tài", 50];
-
   const last_results = history.map(h => h.result);
   const totals = history.map(h => h.total);
   const all_dice = history.flatMap(h => h.dice);
   const dice_freq = Array.from({ length: 6 }, (_, i) => all_dice.filter(d => d === i + 1).length);
-  const avg_total = totals.reduce((a, b) => a + b, 0) / totals.length;
+  const avg_total = mean(totals);
 
   let predictions = [];
-
   if (vip_mode) {
-    predictions.push((totals.at(-1) + totals.at(-2)) % 2 === 0 ? "Tài" : "Xỉu");
-    predictions.push(avg_total > 10.5 ? "Tài" : "Xỉu");
-    predictions.push(dice_freq[4] + dice_freq[5] > dice_freq[0] + dice_freq[1] ? "Tài" : "Xỉu");
-    predictions.push(totals.filter(t => t > 10).length > totals.length / 2 ? "Tài" : "Xỉu");
-    predictions.push(totals.slice(-3).reduce((a, b) => a + b, 0) > 33 ? "Tài" : "Xỉu");
-    while (predictions.length < 20) predictions.push(Math.random() > 0.5 ? "Tài" : "Xỉu");
+    predictions = ["Tài", "Xỉu", "Tài"];
   } else {
     predictions = [
-      totals.slice(-3).reduce((a, b) => a + b, 0) > 30 ? "Tài" : "Xỉu",
-      last_results.filter(r => r === "Tài").length > last_results.length / 2 ? "Tài" : "Xỉu",
-      totals.at(-1) > avg_total ? "Tài" : "Xỉu",
-      totals.at(-1) > 10 && totals.at(-2) > 10 ? "Tài" : "Xỉu",
-      totals.at(-1) < 10 && totals.at(-2) < 10 ? "Xỉu" : "Tài"
+      totals.slice(0, 3).reduce((a, b) => a + b, 0) > 30 ? "Tài" : "Xỉu",
+      last_results.filter(r => r === "Tài").length > last_results.filter(r => r === "Xỉu").length ? "Tài" : "Xỉu",
+      totals[0] > avg_total ? "Tài" : "Xỉu",
+      totals[0] > 10 && totals[1] > 10 ? "Tài" : "Xỉu",
+      totals[0] < 10 && totals[1] < 10 ? "Xỉu" : "Tài",
     ];
   }
 
-  let tai_votes = 0, xiu_votes = 0;
-  predictions.forEach((p, i) => {
-    const w = FORMULA_WEIGHTS[i] || 1;
-    if (p === "Tài") tai_votes += w;
-    else xiu_votes += w;
-  });
+  const tai_votes = predictions.filter(p => p === "Tài").length;
+  const xiu_votes = predictions.filter(p => p === "Xỉu").length;
 
-  const [pattern_pred, pattern_desc] = analyze_patterns(last_results);
+  let [pattern_pred, pattern_desc] = analyze_patterns(last_results);
   if (vip_mode && pattern_pred) {
-    const weight = pattern_desc.includes("Bệt") || pattern_desc.includes("tuần hoàn") ? 3 : 2;
-    if (pattern_pred === "Tài") tai_votes += weight;
-    else xiu_votes += weight;
+    if (pattern_pred === "Tài") tai_votes += 2;
+    else xiu_votes += 2;
   }
 
-  const [streak_pred, streak_conf] = analyze_big_streak(history);
+  let [streak_pred, streak_conf] = analyze_big_streak(history);
   if (streak_pred && streak_conf > 85) {
     if (streak_pred === "Tài") tai_votes += 5;
     else xiu_votes += 5;
   }
 
-  const totalVotes = tai_votes + xiu_votes;
-  const confidence = totalVotes > 0 ? Math.round((Math.max(tai_votes, xiu_votes) / totalVotes) * 100) : 50;
-  const final = tai_votes > xiu_votes ? "Tài" : "Xỉu";
+  let [sum_pred, sum_conf] = analyze_sum_trend(history);
+  if (sum_pred && sum_conf > 80) {
+    if (sum_pred === "Tài") tai_votes += 3;
+    else xiu_votes += 3;
+  }
 
-  PREDICTION_HISTORY.push({
-    timestamp: Date.now(),
-    result: final,
-    confidence,
-    formulas: predictions
-  });
+  let [pattern_trend_pred, pattern_trend_conf] = analyze_pattern_trend(history);
+  if (pattern_trend_pred) {
+    if (pattern_trend_pred === "Tài") tai_votes += 1;
+    else xiu_votes += 1;
+  }
 
-  return [final, confidence];
-}
+  const total = tai_votes + xiu_votes;
+  const confidence = total > 0 ? Math.round((Math.max(tai_votes, xiu_votes) / total) * 100) : 50;
+  const final_prediction = tai_votes > xiu_votes ? "Tài" : "Xỉu";
 
-function update_formula_weights(actual_result) {
-  if (PREDICTION_HISTORY.length < 1) return;
-  const last = PREDICTION_HISTORY.at(-1);
-  last.formulas.forEach((pred, i) => {
-    if (pred === actual_result) {
-      FORMULA_WEIGHTS[i] = Math.min(FORMULA_WEIGHTS[i] + 0.1, 3.0);
-    } else {
-      FORMULA_WEIGHTS[i] = Math.max(FORMULA_WEIGHTS[i] - 0.05, 0.1);
-    }
-  });
+  return [final_prediction, confidence];
 }
 
 fastify.get("/api/hit", async (request, reply) => {
-  const valid = hitResults.filter(item => item.d1 && item.d2 && item.d3);
-  if (valid.length < 1) {
-    return {
-      current_result: null,
-      current_session: null,
-      next_session: null,
-      prediction: null,
-      confidence: null,
-      used_pattern: ""
-    };
+  const validResults = [...hitResults].reverse().filter((item) => item.d1 && item.d2 && item.d3);
+  if (validResults.length < 5) {
+    return { prediction: null, confidence: 0 };
   }
-
-  const history = [...valid].reverse();
-  const current = history[0];
-  const [predicted, confidence] = predict_next(history, true);
-
+  const [prediction, confidence] = predict_next(validResults, true);
   return {
-    current_result: current.result,
-    current_session: current.sid,
-    next_session: current.sid + 1,
-    prediction: predicted,
+    current_session: validResults[0].sid,
+    current_result: validResults[0].result,
+    prediction,
     confidence,
-    used_pattern: analyze_patterns(history.map(h => h.result))[1]
   };
 });
 
-const start = async () => {
-  try {
-    const address = await fastify.listen({ port: PORT, host: "0.0.0.0" });
-    console.log(`Server chạy ở ${address}`);
-  } catch (err) {
+fastify.listen({ port: PORT, host: "0.0.0.0" }, (err, address) => {
+  if (err) {
     console.error(err);
     process.exit(1);
   }
-};
-
-start();
+  console.log(`Server running at ${address}`);
+});
