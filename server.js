@@ -1,6 +1,7 @@
 // server.js
 const Fastify = require("fastify");
 const WebSocket = require("ws");
+const { mean } = require("lodash");
 
 const fastify = Fastify({ logger: false });
 const PORT = process.env.PORT || 3003;
@@ -8,10 +9,6 @@ const PORT = process.env.PORT || 3003;
 let hitResults = [];
 let hitWS = null;
 let hitInterval = null;
-
-function mean(arr) {
-  return arr.reduce((a, b) => a + b, 0) / arr.length;
-}
 
 function connectHitWebSocket() {
   hitWS = new WebSocket("wss://mynygwais.hytsocesk.com/websocket");
@@ -66,8 +63,6 @@ function connectHitWebSocket() {
 
 connectHitWebSocket();
 
-const PREDICTION_HISTORY = [];
-let FORMULA_WEIGHTS = Array(200).fill(1);
 const PATTERN_DATA = {};
 const SUNWIN_ALGORITHM = {};
 
@@ -101,7 +96,7 @@ function analyze_patterns(last_results) {
 }
 
 function analyze_big_streak(history) {
-  let current_result = history[0]?.result;
+  const current_result = history[0]?.result;
   let current_streak = 1;
   for (let i = 1; i < history.length; i++) {
     if (history[i].result === current_result) current_streak++;
@@ -128,16 +123,11 @@ function analyze_sum_trend(history) {
   return [null, 0];
 }
 
-function find_closest_pattern(current) {
-  return Object.keys(PATTERN_DATA).find((k) => current.endsWith(k));
-}
-
 function analyze_pattern_trend(history) {
-  const elements = history.slice(0, 15).map(s => s.result === "Tài" ? "t" : "x");
-  const current_pattern = elements.reverse().join("");
-  const closest = find_closest_pattern(current_pattern);
-  if (closest && PATTERN_DATA[closest]) {
-    const data = PATTERN_DATA[closest];
+  const elements = history.slice(0, 15).map(s => s.result === "Tài" ? "t" : "x").reverse();
+  const current_pattern = elements.join("");
+  const data = PATTERN_DATA[current_pattern];
+  if (data) {
     if (data.tai === data.xiu) {
       return [history[0].total >= 11 ? "Tài" : "Xỉu", 55];
     }
@@ -166,28 +156,33 @@ function predict_next(history, vip_mode = false) {
     ];
   }
 
-  const tai_votes = predictions.filter(p => p === "Tài").length;
-  const xiu_votes = predictions.filter(p => p === "Xỉu").length;
+  let tai_votes = predictions.filter(p => p === "Tài").length;
+  let xiu_votes = predictions.filter(p => p === "Xỉu").length;
 
-  let [pattern_pred, pattern_desc] = analyze_patterns(last_results);
+  const [pattern_pred, pattern_desc] = analyze_patterns(last_results);
   if (vip_mode && pattern_pred) {
-    if (pattern_pred === "Tài") tai_votes += 2;
-    else xiu_votes += 2;
+    if (pattern_desc.includes("Bệt") || pattern_desc.includes("tuần hoàn")) {
+      if (pattern_pred === "Tài") tai_votes += 3;
+      else xiu_votes += 3;
+    } else {
+      if (pattern_pred === "Tài") tai_votes += 2;
+      else xiu_votes += 2;
+    }
   }
 
-  let [streak_pred, streak_conf] = analyze_big_streak(history);
+  const [streak_pred, streak_conf] = analyze_big_streak(history);
   if (streak_pred && streak_conf > 85) {
     if (streak_pred === "Tài") tai_votes += 5;
     else xiu_votes += 5;
   }
 
-  let [sum_pred, sum_conf] = analyze_sum_trend(history);
+  const [sum_pred, sum_conf] = analyze_sum_trend(history);
   if (sum_pred && sum_conf > 80) {
     if (sum_pred === "Tài") tai_votes += 3;
     else xiu_votes += 3;
   }
 
-  let [pattern_trend_pred, pattern_trend_conf] = analyze_pattern_trend(history);
+  const [pattern_trend_pred, pattern_trend_conf] = analyze_pattern_trend(history);
   if (pattern_trend_pred) {
     if (pattern_trend_pred === "Tài") tai_votes += 1;
     else xiu_votes += 1;
