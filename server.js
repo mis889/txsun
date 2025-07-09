@@ -12,7 +12,7 @@ let ws = null;
 let reconnectInterval = 5000;
 
 function getTaiXiu(total) {
-  return total >= 11 ? "Tài" : "Xỉu";
+  return total >= 11 ? "T" : "X";
 }
 
 function taiXiuStats(totalsList) {
@@ -22,16 +22,16 @@ function taiXiuStats(totalsList) {
       acc[type] = (acc[type] || 0) + 1;
       return acc;
     },
-    { "Tài": 0, "Xỉu": 0 }
+    { "T": 0, "X": 0 }
   );
   const freqTotals = {};
   totalsList.forEach(t => freqTotals[t] = (freqTotals[t] || 0) + 1);
   const mostCommonTotal = Object.entries(freqTotals).sort((a, b) => b[1] - a[1])[0][0];
   return {
-    tai_count: count["Tài"],
-    xiu_count: count["Xỉu"],
+    tai_count: count["T"],
+    xiu_count: count["X"],
     most_common_total: parseInt(mostCommonTotal),
-    most_common_type: count["Tài"] >= count["Xỉu"] ? "Tài" : "Xỉu"
+    most_common_type: count["T"] >= count["X"] ? "Tài" : "Xỉu"
   };
 }
 
@@ -48,7 +48,7 @@ function rule_special_pattern(last4) {
 function rule_sandwich(last3, lastResult) {
   if (last3[0] === last3[2] && last3[0] !== last3[1]) {
     return {
-      prediction: lastResult === "Tài" ? "Xỉu" : "Tài",
+      prediction: lastResult === "T" ? "Xỉu" : "Tài",
       confidence: 83,
       reason: `Cầu sandwich ${last3}. Bẻ cầu!`
     };
@@ -60,7 +60,7 @@ function rule_special_numbers(last3, lastResult) {
   const count = last3.filter(t => special.has(t)).length;
   if (count >= 2) {
     return {
-      prediction: lastResult === "Tài" ? "Xỉu" : "Tài",
+      prediction: lastResult === "T" ? "Xỉu" : "Tài",
       confidence: 81,
       reason: `Xuất hiện ≥2 số đặc biệt ${Array.from(special)} gần nhất. Bẻ cầu!`
     };
@@ -71,7 +71,7 @@ function rule_frequent_repeat(last6, lastTotal) {
   const freq = last6.filter(t => t === lastTotal).length;
   if (freq >= 3) {
     return {
-      prediction: getTaiXiu(lastTotal),
+      prediction: getTaiXiu(lastTotal) === "T" ? "Tài" : "Xỉu",
       confidence: 80,
       reason: `Số ${lastTotal} lặp lại ${freq} lần. Bắt theo nghiêng cầu!`
     };
@@ -81,7 +81,7 @@ function rule_frequent_repeat(last6, lastTotal) {
 function rule_repeat_pattern(last3, lastResult) {
   if (last3[0] === last3[2] || last3[1] === last3[2]) {
     return {
-      prediction: lastResult === "Tài" ? "Xỉu" : "Tài",
+      prediction: lastResult === "T" ? "Xỉu" : "Tài",
       confidence: 77,
       reason: `Cầu lặp dạng ${last3}. Bẻ cầu theo dạng A-B-B hoặc A-B-A.`
     };
@@ -90,7 +90,7 @@ function rule_repeat_pattern(last3, lastResult) {
 
 function rule_default(lastResult) {
   return {
-    prediction: lastResult === "Tài" ? "Xỉu" : "Tài",
+    prediction: lastResult === "T" ? "Xỉu" : "Tài",
     confidence: 71,
     reason: "Không có cầu đặc biệt nào, bẻ cầu mặc định theo 1-1."
   };
@@ -203,7 +203,7 @@ fastify.get("/api/club789", async (request, reply) => {
   const predictionData = duDoanSunwin200kVip(totals);
 
   return {
-    current_result: getTaiXiu(totals[totals.length - 1]),
+    current_result: getTaiXiu(totals[totals.length - 1]) === "T" ? "Tài" : "Xỉu",
     current_session: valid[0].sid,
     next_session: valid[0].sid + 1,
     prediction: predictionData.prediction,
