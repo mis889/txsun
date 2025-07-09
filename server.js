@@ -1,219 +1,226 @@
-// server.js
 const Fastify = require("fastify");
 const WebSocket = require("ws");
-const { mean } = require("lodash");
 
 const fastify = Fastify({ logger: false });
-const PORT = process.env.PORT || 3003;
+const PORT = process.env.PORT || 3060;
 
-let hitResults = [];
-let hitWS = null;
-let hitInterval = null;
+let lastResults = [];
+let currentResult = null;
+let currentSession = null;
 
-function connectHitWebSocket() {
-  hitWS = new WebSocket("wss://mynygwais.hytsocesk.com/websocket");
+let ws = null;
+let reconnectInterval = 5000;
 
-  hitWS.on("open", () => {
+function getTaiXiu(total) {
+  return total >= 11 ? "Tài" : "Xỉu";
+}
+
+function taiXiuStats(totalsList) {
+  const types = totalsList.map(getTaiXiu);
+  const count = types.reduce(
+    (acc, type) => {
+      acc[type] = (acc[type] || 0) + 1;
+      return acc;
+    },
+    { "Tài": 0, "Xỉu": 0 }
+  );
+  const freqTotals = {};
+  totalsList.forEach(t => freqTotals[t] = (freqTotals[t] || 0) + 1);
+  const mostCommonTotal = Object.entries(freqTotals).sort((a, b) => b[1] - a[1])[0][0];
+  return {
+    tai_count: count["Tài"],
+    xiu_count: count["Xỉu"],
+    most_common_total: parseInt(mostCommonTotal),
+    most_common_type: count["Tài"] >= count["Xỉu"] ? "Tài" : "Xỉu"
+  };
+}
+
+function rule_special_pattern(last4) {
+  if (last4[0] === last4[2] && last4[0] === last4[3] && last4[0] !== last4[1]) {
+    return {
+      prediction: "Tài",
+      confidence: 85,
+      reason: `Cầu đặc biệt ${last4}. Bắt Tài theo công thức đặc biệt.`
+    };
+  }
+}
+
+function rule_sandwich(last3, lastResult) {
+  if (last3[0] === last3[2] && last3[0] !== last3[1]) {
+    return {
+      prediction: lastResult === "Tài" ? "Xỉu" : "Tài",
+      confidence: 83,
+      reason: `Cầu sandwich ${last3}. Bẻ cầu!`
+    };
+  }
+}
+
+function rule_special_numbers(last3, lastResult) {
+  const special = new Set([7, 9, 10]);
+  const count = last3.filter(t => special.has(t)).length;
+  if (count >= 2) {
+    return {
+      prediction: lastResult === "Tài" ? "Xỉu" : "Tài",
+      confidence: 81,
+      reason: `Xuất hiện ≥2 số đặc biệt ${Array.from(special)} gần nhất. Bẻ cầu!`
+    };
+  }
+}
+
+function rule_frequent_repeat(last6, lastTotal) {
+  const freq = last6.filter(t => t === lastTotal).length;
+  if (freq >= 3) {
+    return {
+      prediction: getTaiXiu(lastTotal),
+      confidence: 80,
+      reason: `Số ${lastTotal} lặp lại ${freq} lần. Bắt theo nghiêng cầu!`
+    };
+  }
+}
+
+function rule_repeat_pattern(last3, lastResult) {
+  if (last3[0] === last3[2] || last3[1] === last3[2]) {
+    return {
+      prediction: lastResult === "Tài" ? "Xỉu" : "Tài",
+      confidence: 77,
+      reason: `Cầu lặp dạng ${last3}. Bẻ cầu theo dạng A-B-B hoặc A-B-A.`
+    };
+  }
+}
+
+function rule_default(lastResult) {
+  return {
+    prediction: lastResult === "Tài" ? "Xỉu" : "Tài",
+    confidence: 71,
+    reason: "Không có cầu đặc biệt nào, bẻ cầu mặc định theo 1-1."
+  };
+}
+
+function duDoanSunwin200kVip(totals) {
+  if (totals.length < 4) {
+    return {
+      prediction: "Chờ",
+      confidence: 0,
+      reason: "Chưa đủ dữ liệu, cần ít nhất 4 phiên.",
+      history_summary: taiXiuStats(totals)
+    };
+  }
+
+  const last4 = totals.slice(-4);
+  const last3 = totals.slice(-3);
+  const last6 = totals.slice(-6);
+  const lastTotal = totals[totals.length - 1];
+  const lastResult = getTaiXiu(lastTotal);
+
+  const rules = [
+    () => rule_special_pattern(last4),
+    () => rule_sandwich(last3, lastResult),
+    () => rule_special_numbers(last3, lastResult),
+    () => rule_frequent_repeat(last6, lastTotal),
+    () => rule_repeat_pattern(last3, lastResult),
+  ];
+
+  for (const rule of rules) {
+    const result = rule();
+    if (result) {
+      result.history_summary = taiXiuStats(totals);
+      return result;
+    }
+  }
+
+  const result = rule_default(lastResult);
+  result.history_summary = taiXiuStats(totals);
+  return result;
+}
+
+function connectWebSocket() {
+  ws = new WebSocket("wss://websocket.atpman.net/websocket");
+
+  ws.on("open", () => {
+    console.log("✅ Đã kết nối WebSocket");
+
     const authPayload = [
       1,
       "MiniGame",
-      "",
-      "",
+      "miss88",
+      "vinhk122011",
       {
-        agentId: "1",
-        accessToken: "1-87eb5bcde00a1f5b3de92664a0ff9f91",
-        reconnect: true,
-      },
+        info: "{\"ipAddress\":\"2001:ee0:4f91:2000:689d:c3f4:e10d:5bd7\",\"userId\":\"daf3a573-8ac5-4db4-9717-256b848044af\",\"username\":\"S8_miss88\",\"timestamp\":1752071555947,\"refreshToken\":\"39d76d58fc7e4b819e097764af7240c8.34dcc325f1fc4e758e832c8f7a960224\"}",
+        signature: "01095CFB5D30CA4208D26E0582C3A04CB18CE1FA78EE41F1D0F63D6D3D368BC03B4007FC54AAC0A4A6BA89846C7D0ED6F4609C2976B6290C19629884ADCAD90C86B7F2C8D8CA582A077A7932D0F4F70FBBC6FEDD0B89C249373A310427565D140016FF46940B81FBEA894136D431BF4BAA3B9B66C692B55AD81657A535DD3612"
+      }
     ];
-    hitWS.send(JSON.stringify(authPayload));
 
-    clearInterval(hitInterval);
-    hitInterval = setInterval(() => {
-      const taiXiuPayload = [6, "MiniGame", "taixiuPlugin", { cmd: 1005 }];
-      hitWS.send(JSON.stringify(taiXiuPayload));
-    }, 5000);
+    ws.send(JSON.stringify(authPayload));
+    setTimeout(() => {
+      const dicePayload = [6, "MiniGame", "taixiuUnbalancedPlugin", { cmd: 2000 }];
+      ws.send(JSON.stringify(dicePayload));
+    }, 2000);
   });
 
-  hitWS.on("message", (data) => {
+  ws.on("message", (data) => {
     try {
       const json = JSON.parse(data);
       if (Array.isArray(json) && json[1]?.htr) {
-        hitResults = json[1].htr.map((item) => ({
+        lastResults = json[1].htr.map(item => ({
           sid: item.sid,
-          d1: item.d1,
-          d2: item.d2,
-          d3: item.d3,
-          total: item.d1 + item.d2 + item.d3,
-          result: item.d1 + item.d2 + item.d3 >= 11 ? "Tài" : "Xỉu",
-          dice: [item.d1, item.d2, item.d3],
+          total: item.d1 + item.d2 + item.d3
         }));
+
+        const latest = lastResults[0];
+        currentResult = getTaiXiu(latest.total);
+        currentSession = latest.sid;
+
+        console.log(`📥 Phiên ${currentSession}: Tổng = ${latest.total} → ${currentResult}`);
       }
     } catch (e) {}
   });
 
-  hitWS.on("close", () => {
-    clearInterval(hitInterval);
-    setTimeout(connectHitWebSocket, 5000);
+  ws.on("close", () => {
+    console.warn("⚠️ WebSocket bị đóng, thử kết nối lại sau 5 giây...");
+    setTimeout(connectWebSocket, reconnectInterval);
   });
 
-  hitWS.on("error", () => {
-    hitWS.close();
+  ws.on("error", (err) => {
+    console.error("❌ Lỗi WebSocket:", err.message);
+    ws.close();
   });
 }
 
-connectHitWebSocket();
+connectWebSocket();
 
-const PATTERN_DATA = {};
-const SUNWIN_ALGORITHM = {};
-
-function analyze_patterns(last_results) {
-  if (last_results.length < 5) return [null, "Chưa đủ dữ liệu phân tích"];
-  const detected_patterns = [];
-
-  for (let window = 2; window < 6; window++) {
-    for (let start = 0; start <= last_results.length - window * 2; start++) {
-      const sequence = last_results.slice(start, start + window);
-      const next_sequence = last_results.slice(start + window, start + window * 2);
-      if (sequence.join() === next_sequence.join()) {
-        detected_patterns.push([sequence[sequence.length - 1], `Cầu tuần hoàn ${window}nút (${sequence.join("-")})`]);
-      }
-    }
+fastify.get("/api/club789", async (request, reply) => {
+  const valid = lastResults.slice().reverse();
+  const totals = valid.map(v => v.total);
+  if (totals.length < 1) {
+    return {
+      current_result: null,
+      current_session: null,
+      next_session: null,
+      prediction: null,
+      used_pattern: ""
+    };
   }
+  const predictionData = duDoanSunwin200kVip(totals);
 
-  const special_patterns = {
-    "Bệt dài": (seq) => seq.length >= 5 && new Set(seq).size === 1,
-    "Đảo đều": (seq) => seq.length >= 4 && seq.every((v, i, arr) => i === 0 || v !== arr[i - 1]),
-    "Cầu nghiêng": (seq) => seq.length >= 5 && (seq.filter(x => x === "Tài").length / seq.length > 0.7 || seq.filter(x => x === "Xỉu").length / seq.length > 0.7)
-  };
-
-  for (let [name, fn] of Object.entries(special_patterns)) {
-    if (fn(last_results.slice(0, 6))) {
-      const pred = name.includes("Đảo") && last_results[0] === "Xỉu" ? "Tài" : last_results[0];
-      detected_patterns.push([pred, `Cầu đặc biệt: ${name}`]);
-    }
-  }
-  return detected_patterns[0] || [null, "Không phát hiện cầu rõ ràng"];
-}
-
-function analyze_big_streak(history) {
-  const current_result = history[0]?.result;
-  let current_streak = 1;
-  for (let i = 1; i < history.length; i++) {
-    if (history[i].result === current_result) current_streak++;
-    else break;
-  }
-  if (current_streak >= 3) {
-    const last_total = history[0].total;
-    let confidence = current_result === "Tài"
-      ? (last_total >= 17 ? Math.min(95 + (current_streak - 3) * 5, 99) : Math.min(90 + (current_streak - 3) * 5, 98))
-      : (last_total <= 10 ? Math.min(95 + (current_streak - 3) * 5, 99) : Math.min(90 + (current_streak - 3) * 5, 98));
-    return [current_result, confidence];
-  }
-  return [null, 0];
-}
-
-function analyze_sum_trend(history) {
-  const last_sum = history[0].total;
-  const data = SUNWIN_ALGORITHM[last_sum.toString()];
-  if (data) {
-    if (data.tai === 100) return ["Tài", 95];
-    if (data.xiu === 100) return ["Xỉu", 95];
-    return [data.tai > data.xiu ? "Tài" : "Xỉu", Math.max(data.tai, data.xiu)];
-  }
-  return [null, 0];
-}
-
-function analyze_pattern_trend(history) {
-  const elements = history.slice(0, 15).map(s => s.result === "Tài" ? "t" : "x").reverse();
-  const current_pattern = elements.join("");
-  const data = PATTERN_DATA[current_pattern];
-  if (data) {
-    if (data.tai === data.xiu) {
-      return [history[0].total >= 11 ? "Tài" : "Xỉu", 55];
-    }
-    return [data.tai > data.xiu ? "Tài" : "Xỉu", Math.max(data.tai, data.xiu)];
-  }
-  return [null, 0];
-}
-
-function predict_next(history, vip_mode = false) {
-  const last_results = history.map(h => h.result);
-  const totals = history.map(h => h.total);
-  const all_dice = history.flatMap(h => h.dice);
-  const dice_freq = Array.from({ length: 6 }, (_, i) => all_dice.filter(d => d === i + 1).length);
-  const avg_total = mean(totals);
-
-  let predictions = [];
-  if (vip_mode) {
-    predictions = ["Tài", "Xỉu", "Tài"];
-  } else {
-    predictions = [
-      totals.slice(0, 3).reduce((a, b) => a + b, 0) > 30 ? "Tài" : "Xỉu",
-      last_results.filter(r => r === "Tài").length > last_results.filter(r => r === "Xỉu").length ? "Tài" : "Xỉu",
-      totals[0] > avg_total ? "Tài" : "Xỉu",
-      totals[0] > 10 && totals[1] > 10 ? "Tài" : "Xỉu",
-      totals[0] < 10 && totals[1] < 10 ? "Xỉu" : "Tài",
-    ];
-  }
-
-  let tai_votes = predictions.filter(p => p === "Tài").length;
-  let xiu_votes = predictions.filter(p => p === "Xỉu").length;
-
-  const [pattern_pred, pattern_desc] = analyze_patterns(last_results);
-  if (vip_mode && pattern_pred) {
-    if (pattern_desc.includes("Bệt") || pattern_desc.includes("tuần hoàn")) {
-      if (pattern_pred === "Tài") tai_votes += 3;
-      else xiu_votes += 3;
-    } else {
-      if (pattern_pred === "Tài") tai_votes += 2;
-      else xiu_votes += 2;
-    }
-  }
-
-  const [streak_pred, streak_conf] = analyze_big_streak(history);
-  if (streak_pred && streak_conf > 85) {
-    if (streak_pred === "Tài") tai_votes += 5;
-    else xiu_votes += 5;
-  }
-
-  const [sum_pred, sum_conf] = analyze_sum_trend(history);
-  if (sum_pred && sum_conf > 80) {
-    if (sum_pred === "Tài") tai_votes += 3;
-    else xiu_votes += 3;
-  }
-
-  const [pattern_trend_pred, pattern_trend_conf] = analyze_pattern_trend(history);
-  if (pattern_trend_pred) {
-    if (pattern_trend_pred === "Tài") tai_votes += 1;
-    else xiu_votes += 1;
-  }
-
-  const total = tai_votes + xiu_votes;
-  const confidence = total > 0 ? Math.round((Math.max(tai_votes, xiu_votes) / total) * 100) : 50;
-  const final_prediction = tai_votes > xiu_votes ? "Tài" : "Xỉu";
-
-  return [final_prediction, confidence];
-}
-
-fastify.get("/api/hit", async (request, reply) => {
-  const validResults = [...hitResults].reverse().filter((item) => item.d1 && item.d2 && item.d3);
-  if (validResults.length < 5) {
-    return { prediction: null, confidence: 0 };
-  }
-  const [prediction, confidence] = predict_next(validResults, true);
   return {
-    current_session: validResults[0].sid,
-    next_session: validResults[0].sid + 1,
-    current_result: validResults[0].result,
-    prediction,
-    confidence,
+    current_result: getTaiXiu(totals[totals.length - 1]),
+    current_session: valid[0].sid,
+    next_session: valid[0].sid + 1,
+    prediction: predictionData.prediction,
+    confidence: predictionData.confidence,
+    reason: predictionData.reason,
+    used_pattern: totals.slice(-13).map(getTaiXiu).join("")
   };
 });
 
-fastify.listen({ port: PORT, host: "0.0.0.0" }, (err, address) => {
-  if (err) {
+const start = async () => {
+  try {
+    const address = await fastify.listen({ port: PORT, host: "0.0.0.0" });
+    console.log(`🚀 Server đang chạy tại ${address}`);
+  } catch (err) {
     console.error(err);
     process.exit(1);
   }
-  console.log(`Server running at ${address}`);
-});
+};
+
+start();
