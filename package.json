@@ -1,18 +1,19 @@
 {
-  "name": "taixiu-ws-server",
+  "name": "fastify-websocket-server",
   "version": "1.0.0",
-  "description": "Server dự đoán Tài Xỉu dùng WebSocket và Fastify",
-  "main": "server.js",
+  "description": "Fastify server with WebSocket and SQLite support",
+  "main": "789dudoan.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node 789dudoan.js"
   },
   "dependencies": {
-    "fastify": "^4.27.0",
+    "@fastify/cors": "^8.3.0",
+    "@fastify/websocket": "^7.0.0",
+    "fastify": "^4.24.3",
+    "sqlite3": "^5.1.6",
     "ws": "^8.16.0"
   },
   "engines": {
-    "node": ">=14.0.0"
-  },
-  "author": "ChatGPT + pc Acc Kẹp",
-  "license": "MIT"
+    "node": ">=18.0.0"
+  }
 }
