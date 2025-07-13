@@ -1,30 +1,16 @@
 const Fastify = require("fastify");
-const cors = require("@fastify/cors");
 const WebSocket = require("ws");
 
-const PORT = process.env.PORT || 3001;
-const HEARTBEAT_INTERVAL = 800;
-const MAX_RECONNECT_ATTEMPTS = 10;
+const fastify = Fastify({ logger: false });
+const PORT = process.env.PORT || 3060;
 
-// Initialize Fastify with simple logger
-const fastify = Fastify({
-  logger: true,
-  bodyLimit: 1048576 * 10
-});
+let lastResults = [];
+let currentResult = null;
+let currentSession = null;
 
-// Game data
-const gameData = {
-  sessions: [],
-  currentSession: null,
-  pendingSession: null,
-  lastResults: [],
-  lastUpdate: Date.now(),
-  currentConfidence: Math.floor(Math.random() * (97 - 51 + 1)) + 51,
-  maxSessions: 100,
-  isConnected: false
-};
+let ws = null;
+let reconnectInterval = 5000;
 
-// Prediction map (giữ nguyên như code gốc)
 const predictionMap = {
   "TXT": "Xỉu", 
   "TTXX": "Tài", 
@@ -280,53 +266,13 @@ const predictionMap = {
   "XXXXXXX": "Tài"
 };
 
-function predictFromPattern(pattern) {
-  for (let len = Math.min(pattern.length, 4); len >= 1; len--) {
-    const key = pattern.substring(0, len);
-    if (predictionMap[key]) return predictionMap[key];
-  }
-  return pattern[0] === "T" ? "Tài" : "Xỉu";
-}
-
-function calculateResult(d1, d2, d3) {
-  const sum = d1 + d2 + d3;
-  return {
-    result: sum >= 11 ? "T" : "X",
-    sum: sum
-  };
-}
-
-// WebSocket Connection
-let wsConnection = null;
-let heartbeatTimer = null;
-let reconnectAttempts = 0;
-
 function connectWebSocket() {
-  if (wsConnection) {
-    wsConnection.removeAllListeners();
-    if (wsConnection.readyState !== WebSocket.CLOSED) {
-      wsConnection.close();
-    }
-  }
+  ws = new WebSocket("wss://websocket.atpman.net/websocket");
 
-  clearInterval(heartbeatTimer);
+  ws.on("open", () => {
+    console.log("✅ Đã kết nối WebSocket");
 
-  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-    fastify.log.error(`Failed to reconnect after ${MAX_RECONNECT_ATTEMPTS} attempts`);
-    return;
-  }
-
-  reconnectAttempts++;
-  fastify.log.info(`Connecting to SunWin (attempt ${reconnectAttempts})...`);
-
-  wsConnection = new WebSocket("wss://websocket.atpman.net/websocket");
-
-  wsConnection.on('open', () => {
-    reconnectAttempts = 0;
-    gameData.isConnected = true;
-    fastify.log.info("Connection established");
-    
-    const authData = [
+    const authPayload = [
       1,
       "MiniGame",
       "dfghhhgffgggg",
@@ -336,179 +282,110 @@ function connectWebSocket() {
         signature: "52830A25058B665F9A929FD75A80E6893BCD7DDB2BA3276B132BC863453AA09AE60B66FBE4B25F3892B27492391BF08F30D2DDD84B140F0007F1630BC6727A45543749ED892B94D78FEC9683FCF9A15F4EF582D8E4D9F7DD85AFD3BAE566A7B886F7DC380DA10EF5527C38BEE9E4F06C95B9612105CC1B2545C2A13644A29F1F"
       }
     ];
-    
-    wsConnection.send(JSON.stringify(authData));
-    wsConnection.send(JSON.stringify([6, "MiniGame", "taixiuPlugin", { cmd: 1001 }]));
-    
-    heartbeatTimer = setInterval(() => {
-      if (wsConnection.readyState === WebSocket.OPEN) {
-        wsConnection.send(JSON.stringify([6, "MiniGame", "taixiuUnbalancedPlugin", { cmd: 2000 }]));
-      }
-    }, HEARTBEAT_INTERVAL);
+
+    ws.send(JSON.stringify(authPayload));
+    console.log("🔐 Đã gửi payload xác thực");
+
+    setTimeout(() => {
+      const dicePayload = [6, "MiniGame", "taixiuUnbalancedPlugin", { cmd: 2000 }];
+      ws.send(JSON.stringify(dicePayload));
+      console.log("🎲 Đã gửi lệnh lấy kết quả xúc xắc (cmd: 2000)");
+    }, 2000);
   });
 
-  wsConnection.on('message', (data) => {
+  ws.on("message", (data) => {
     try {
       const json = JSON.parse(data);
+      if (Array.isArray(json) && json[1]?.htr) {
+        lastResults = json[1].htr.map(item => ({
+          sid: item.sid,
+          d1: item.d1,
+          d2: item.d2,
+          d3: item.d3
+        }));
 
-      // Process real-time results
-      if (Array.isArray(json) && json[3]?.res?.d1 !== undefined) {
-        const res = json[3].res;
-        
-        const isNewSession = !gameData.currentSession || 
-                           (res.sid > gameData.currentSession && 
-                            res.timestamp > (gameData.lastUpdate - 10000));
-        
-        if (isNewSession) {
-          if (gameData.pendingSession) {
-            const result = calculateResult(gameData.pendingSession.d1, 
-                                          gameData.pendingSession.d2, 
-                                          gameData.pendingSession.d3);
-            
-            gameData.lastResults.unshift({
-              ...gameData.pendingSession,
-              result: result.result,
-              sum: result.sum
-            });
-            
-            if (gameData.lastResults.length > 20) {
-              gameData.lastResults.pop();
-            }
-          }
+        const latest = lastResults[0];
+        const total = latest.d1 + latest.d2 + latest.d3;
+        currentResult = total >= 11 ? "Tài" : "Xỉu";
+        currentSession = latest.sid;
 
-          gameData.pendingSession = {
-            sid: res.sid,
-            d1: res.d1,
-            d2: res.d2,
-            d3: res.d3,
-            timestamp: Date.now()
-          };
-          
-          gameData.currentSession = res.sid;
-          gameData.currentConfidence = Math.floor(Math.random() * (97 - 51 + 1)) + 51;
-          gameData.lastUpdate = Date.now();
-          
-          fastify.log.info(`New session ${res.sid}: ${res.d1},${res.d2},${res.d3}`);
-        }
+        console.log(`📥 Phiên ${currentSession}: ${latest.d1} + ${latest.d2} + ${latest.d3} = ${total} → ${currentResult}`);
       }
-      // Process history
-      else if (Array.isArray(json) && json[1]?.htr) {
-        gameData.sessions = json[1].htr
-          .filter(x => x.d1 !== undefined)
-          .map(x => {
-            const result = calculateResult(x.d1, x.d2, x.d3);
-            return {
-              sid: x.sid,
-              d1: x.d1,
-              d2: x.d2,
-              d3: x.d3,
-              result: result.result,
-              sum: result.sum,
-              timestamp: Date.now()
-            };
-          })
-          .sort((a, b) => b.sid - a.sid)
-          .slice(0, gameData.maxSessions);
-          
-        if (gameData.sessions.length > 0) {
-          gameData.currentSession = gameData.sessions[0].sid;
-        }
-        fastify.log.info(`Loaded ${gameData.sessions.length} historical sessions`);
-      }
-    } catch (error) {
-      fastify.log.error("Data processing error:", error);
+    } catch (e) {
+      // Bỏ qua lỗi nhẹ
     }
   });
 
-  wsConnection.on('close', () => {
-    gameData.isConnected = false;
-    fastify.log.warn("Connection lost, attempting to reconnect...");
-    setTimeout(connectWebSocket, 5000);
+  ws.on("close", () => {
+    console.warn("⚠️ WebSocket bị đóng, thử lại sau 5 giây...");
+    setTimeout(connectWebSocket, reconnectInterval);
   });
 
-  wsConnection.on('error', (err) => {
-    gameData.isConnected = false;
-    fastify.log.error("Connection error:", err);
+  ws.on("error", (err) => {
+    console.error("❌ Lỗi WebSocket:", err.message);
+    ws.close();
   });
 }
 
-// CORS
-fastify.register(cors, {
-  origin: "*",
-  methods: ["GET", "OPTIONS"]
-});
+connectWebSocket();
 
-// API Endpoint - Đã sửa đổi để trả về đúng định dạng
-fastify.get("/api/789club", async (request, reply) => {
-  try {
-    const allResults = [
-      ...(gameData.pendingSession ? [{
-        ...gameData.pendingSession,
-        ...calculateResult(gameData.pendingSession.d1, gameData.pendingSession.d2, gameData.pendingSession.d3)
-      }] : []),
-      ...gameData.lastResults,
-      ...gameData.sessions
-    ].sort((a, b) => b.sid - a.sid);
+fastify.get("/api/club789", async (request, reply) => {
+  const validResults = [...lastResults]
+    .reverse()
+    .filter(item => item.d1 && item.d2 && item.d3);
 
-    if (allResults.length === 0) {
-      return reply.status(404).send({
-        status: "error",
-        message: "No session data available",
-        is_connected: gameData.isConnected
-      });
-    }
-
-    const last15Results = allResults.slice(0, 15);
-    const pattern = last15Results.map(p => p.result).join("");
-
-    const response = {
-      phien_hien_tai: allResults[0].sid + 1, // Phiên tiếp theo
-      du_doan: predictFromPattern(pattern),
-      do_tin_cay: gameData.currentConfidence,
-      data: {
-        session: allResults[0].sid,
-        dice: [allResults[0].d1, allResults[0].d2, allResults[0].d3],
-        result: allResults[0].result,
-        sum: allResults[0].sum,
-        next_session: allResults[0].sid + 1,
-        prediction: predictFromPattern(pattern),
-        confidence: `${gameData.currentConfidence}%`,
-        pattern: pattern,
-        algorithm: pattern.substring(0, 6),
-        last_update: gameData.lastUpdate,
-        server_time: Date.now(),
-        is_live: !!gameData.pendingSession,
-        is_connected: gameData.isConnected,
-        total_sessions: allResults.length
-      }
+  if (validResults.length < 1) {
+    return {
+      current_result: null,
+      current_session: null,
+      next_session: null,
+      prediction: null,
+      used_pattern: ""
     };
-
-    return response;
-  } catch (err) {
-    fastify.log.error("API error:", err);
-    return reply.status(500).send({
-      status: "error",
-      message: "System error"
-    });
   }
+
+  const current = validResults[0];
+  const total = current.d1 + current.d2 + current.d3;
+  const result = total >= 11 ? "Tài" : "Xỉu";
+  const currentSession = current.sid;
+  const nextSession = currentSession + 1;
+
+  const pattern = validResults
+    .slice(0, 10)
+    .map(item => {
+      const sum = item.d1 + item.d2 + item.d3;
+      return sum >= 11 ? "T" : "X";
+    })
+    .reverse()
+    .join("");
+
+  // Tìm pattern khớp dài nhất trong predictionMap
+  let prediction = null;
+  for (let len = 7; len >= 3; len--) {
+    const subPattern = pattern.slice(-len);
+    if (predictionMap[subPattern]) {
+      prediction = predictionMap[subPattern];
+      break;
+    }
+  }
+
+  return {
+    current_result: result,
+    current_session: currentSession,
+    next_session: nextSession,
+    prediction: prediction,
+    used_pattern: pattern
+  };
 });
 
-// Start server
-fastify.listen({ port: PORT, host: "0.0.0.0" }, (err) => {
-  if (err) {
-    fastify.log.error("Server startup error:", err);
+const start = async () => {
+  try {
+    const address = await fastify.listen({ port: PORT, host: "0.0.0.0" });
+    console.log(`🚀 Server đang chạy tại ${address}`);
+  } catch (err) {
+    console.error(err);
     process.exit(1);
   }
-  fastify.log.info(`Server running on port ${PORT}`);
-  connectWebSocket();
-});
+};
 
-// Handle server shutdown
-process.on("SIGINT", () => {
-  fastify.log.info("Shutting down server...");
-  if (wsConnection) wsConnection.close();
-  clearInterval(heartbeatTimer);
-  fastify.close().then(() => {
-    process.exit(0);
-  });
-});
+start();
