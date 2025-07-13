@@ -161,24 +161,24 @@ connectWebSocket();
 
 fastify.get("/api/club789", async (request, reply) => {
   const validResults = [...lastResults].reverse().filter(item => item.d1 && item.d2 && item.d3);
+  const totalsList = validResults.map(item => item.d1 + item.d2 + item.d3);
+  const usedPattern = totalsList.slice(-13).map(getTaiXiu).join("");
+
   if (validResults.length < 4) {
     return {
-      current_result: null,
-      current_session: null,
-      next_session: null,
+      current_result: getTaiXiu(totalsList[totalsList.length - 1] || 0),
+      current_session: validResults[0]?.sid || null,
+      next_session: validResults[0]?.sid ? validResults[0].sid + 1 : null,
       prediction: "Chờ",
       confidence: 0,
       reason: "Chưa đủ dữ liệu",
-      used_pattern: ""
+      used_pattern: usedPattern
     };
   }
 
-  const totalsList = validResults.map(item => item.d1 + item.d2 + item.d3);
   const result = duDoanSunwin200kVIP(totalsList);
   const currentSession = validResults[0].sid;
   const nextSession = currentSession + 1;
-
-  const usedPattern = totalsList.slice(-13).map(getTaiXiu).join("");
 
   return {
     current_result: getTaiXiu(totalsList[totalsList.length - 1]),
