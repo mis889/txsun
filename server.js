@@ -4,124 +4,43 @@ const WebSocket = require("ws");
 const fastify = Fastify({ logger: false });
 const PORT = process.env.PORT || 3060;
 
-let lastResults = []; // Lưu kết quả các phiên gần nhất
+let lastResults = [];
 let currentResult = null;
 let currentSession = null;
 
 let ws = null;
 let reconnectInterval = 5000;
 
-function getTaiXiu(total) {
-  return total >= 11 ? "Tài" : "Xỉu";
-}
-
-function taiXiuStats(totalsList) {
-  const Counter = require("collections/counter");
-  const types = totalsList.map(getTaiXiu);
-  const count = new Counter(types);
-  const totalCounter = new Counter(totalsList);
-  return {
-    tai_count: count.get("Tài") || 0,
-    xiu_count: count.get("Xỉu") || 0,
-    most_common_total: totalCounter.max(),
-    most_common_type: (count.get("Tài") || 0) >= (count.get("Xỉu") || 0) ? "Tài" : "Xỉu"
-  };
-}
-
-function duDoanSunwin200kVIP(totalsList) {
-  const last4 = totalsList.slice(-4);
-  const last3 = totalsList.slice(-3);
-  const last6 = totalsList.slice(-6);
-  const lastTotal = totalsList[totalsList.length - 1];
-  const lastResult = getTaiXiu(lastTotal);
-
-  const rules = [
-    () => {
-      if (last4[0] === last4[2] && last4[0] === last4[3] && last4[0] !== last4[1]) {
-        return {
-          prediction: "Tài",
-          confidence: 85,
-          reason: `Cầu đặc biệt ${last4}. Bắt Tài theo công thức đặc biệt.`
-        };
-      }
-    },
-    () => {
-      if (last3[0] === last3[2] && last3[0] !== last3[1]) {
-        return {
-          prediction: lastResult === "Tài" ? "Xỉu" : "Tài",
-          confidence: 83,
-          reason: `Cầu sandwich ${last3}. Bẻ cầu!`
-        };
-      }
-    },
-    () => {
-      const specialNums = new Set([7, 9, 10]);
-      const count = last3.filter(t => specialNums.has(t)).length;
-      if (count >= 2) {
-        return {
-          prediction: lastResult === "Tài" ? "Xỉu" : "Tài",
-          confidence: 81,
-          reason: `Xuất hiện ≥2 số đặc biệt ${[...specialNums]} gần nhất. Bẻ cầu!`
-        };
-      }
-    },
-    () => {
-      const freq = last6.filter(t => t === lastTotal).length;
-      if (freq >= 3) {
-        return {
-          prediction: getTaiXiu(lastTotal),
-          confidence: 80,
-          reason: `Số ${lastTotal} lặp lại ${freq} lần. Bắt theo nghiêng cầu!`
-        };
-      }
-    },
-    () => {
-      if (last3[0] === last3[2] || last3[1] === last3[2]) {
-        return {
-          prediction: lastResult === "Tài" ? "Xỉu" : "Tài",
-          confidence: 77,
-          reason: `Cầu lặp dạng ${last3}. Bẻ cầu theo dạng A-B-B hoặc A-B-A.`
-        };
-      }
-    }
-  ];
-
-  for (const rule of rules) {
-    const res = rule();
-    if (res) {
-      res.history_summary = taiXiuStats(totalsList);
-      return res;
-    }
-  }
-
-  return {
-    prediction: lastResult === "Tài" ? "Xỉu" : "Tài",
-    confidence: 71,
-    reason: "Không có cầu đặc biệt nào, bẻ cầu mặc định theo 1-1.",
-    history_summary: taiXiuStats(totalsList)
-  };
-}
-
 function connectWebSocket() {
   ws = new WebSocket("wss://websocket.atpman.net/websocket");
 
   ws.on("open", () => {
     console.log("✅ Đã kết nối WebSocket");
+
     const authPayload = [
       1,
       "MiniGame",
       "dfghhhgffgggg",
       "tinhbip",
       {
-        info: "{\"ipAddress\":\"::1\",\"userId\":\"id\",\"username\":\"S8_dfghhhgffgggg\",\"timestamp\":1234567890}",
-        signature: "abc123"
+        info: "{\"ipAddress\":\"2402:9d80:36a:1716:13d7:a37a:60e2:2c64\",\"userId\":\"f68cd413-44d4-4bf5-96eb-23da9a317f17\",\"username\":\"S8_dfghhhgffgggg\",\"timestamp\":1752167805248,\"refreshToken\":\"498e236e749f4afdb8517d1cd23a419b.0ab31b9e397f4cf0b9c23b3d6a7596b6\"}",
+        signature: "52830A25058B665F9A929FD75A80E6893BCD7DDB2BA3276B132BC863453AA09AE60B66FBE4B25F3892B27492391BF08F30D2DDD84B140F0007F1630BC6727A45543749ED892B94D78FEC9683FCF9A15F4EF582D8E4D9F7DD85AFD3BAE566A7B886F7DC380DA10EF5527C38BEE9E4F06C95B9612105CC1B2545C2A13644A29F1F"
       }
     ];
-    ws.send(JSON.stringify(authPayload));
 
+    ws.send(JSON.stringify(authPayload));
+    console.log("🔐 Đã gửi payload xác thực");
+
+    // Gửi lệnh lấy kết quả xúc xắc sau 2 giây
     setTimeout(() => {
-      const dicePayload = [6, "MiniGame", "taixiuUnbalancedPlugin", { cmd: 2000 }];
+      const dicePayload = [
+        6,
+        "MiniGame",
+        "taixiuUnbalancedPlugin",
+        { cmd: 2000 }
+      ];
       ws.send(JSON.stringify(dicePayload));
+      console.log("🎲 Đã gửi lệnh lấy kết quả xúc xắc (cmd: 2000)");
     }, 2000);
   });
 
@@ -138,16 +57,18 @@ function connectWebSocket() {
 
         const latest = lastResults[0];
         const total = latest.d1 + latest.d2 + latest.d3;
-        currentResult = getTaiXiu(total);
+        currentResult = total >= 11 ? "Tài" : "Xỉu";
         currentSession = latest.sid;
 
-        console.log(`📥 Phiên ${currentSession}: ${latest.d1}+${latest.d2}+${latest.d3}=${total} → ${currentResult}`);
+        console.log(`📥 Phiên ${currentSession}: ${latest.d1} + ${latest.d2} + ${latest.d3} = ${total} → ${currentResult}`);
       }
-    } catch {}
+    } catch (e) {
+      // Không log lỗi nhỏ để tránh spam
+    }
   });
 
   ws.on("close", () => {
-    console.warn("⚠️ WebSocket đóng. Kết nối lại sau 5s...");
+    console.warn("⚠️ WebSocket bị đóng, thử kết nối lại sau 5 giây...");
     setTimeout(connectWebSocket, reconnectInterval);
   });
 
@@ -160,35 +81,42 @@ function connectWebSocket() {
 connectWebSocket();
 
 fastify.get("/api/club789", async (request, reply) => {
-  const validResults = [...lastResults].reverse().filter(item => item.d1 && item.d2 && item.d3);
-  const totalsList = validResults.map(item => item.d1 + item.d2 + item.d3);
-  const usedPattern = totalsList.slice(-13).map(getTaiXiu).join("");
+  const validResults = [...lastResults]
+    .reverse()
+    .filter(item => item.d1 && item.d2 && item.d3);
 
-  if (validResults.length < 4) {
+  if (validResults.length < 1) {
     return {
-      current_result: getTaiXiu(totalsList[totalsList.length - 1] || 0),
-      current_session: validResults[0]?.sid || null,
-      next_session: validResults[0]?.sid ? validResults[0].sid + 1 : null,
-      prediction: "Chờ",
-      confidence: 0,
-      reason: "Chưa đủ dữ liệu",
-      used_pattern: usedPattern
+      current_result: null,
+      current_session: null,
+      next_session: null,
+      prediction: null,
+      used_pattern: ""
     };
   }
 
-  const result = duDoanSunwin200kVIP(totalsList);
-  const currentSession = validResults[0].sid;
+  const current = validResults[0];
+  const total = current.d1 + current.d2 + current.d3;
+  const result = total >= 11 ? "Tài" : "Xỉu";
+  const currentSession = current.sid;
   const nextSession = currentSession + 1;
+  const prediction = result === "Tài" ? "Xỉu" : "Tài";
+
+  const pattern = validResults
+    .slice(0, 6)
+    .map(item => {
+      const sum = item.d1 + item.d2 + item.d3;
+      return sum >= 11 ? "T" : "X";
+    })
+    .reverse()
+    .join("");
 
   return {
-    current_result: getTaiXiu(totalsList[totalsList.length - 1]),
+    current_result: result,
     current_session: currentSession,
     next_session: nextSession,
-    prediction: result.prediction,
-    confidence: result.confidence,
-    reason: result.reason,
-    used_pattern: usedPattern,
-    summary: result.history_summary
+    prediction: prediction,
+    used_pattern: pattern
   };
 });
 
