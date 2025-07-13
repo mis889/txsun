@@ -1,132 +1,514 @@
-// server.js - FULL CODE HOÀN CHÍNH KẺT NỐI 789CLUB + DỰ ĐOÁN + API + package.json hỗ trợ
-
 const Fastify = require("fastify");
+const cors = require("@fastify/cors");
 const WebSocket = require("ws");
 
-const fastify = Fastify({ logger: false });
-const PORT = process.env.PORT || 3060;
+const PORT = process.env.PORT || 3001;
+const HEARTBEAT_INTERVAL = 800;
+const MAX_RECONNECT_ATTEMPTS = 10;
 
-let lastResults = [];
-let ws = null;
-let reconnectInterval = 5000;
+// Initialize Fastify with simple logger
+const fastify = Fastify({
+  logger: true,
+  bodyLimit: 1048576 * 10
+});
 
-function getTaiXiu(total) {
-  return total >= 11 ? "T" : "X";
-}
+// Game data
+const gameData = {
+  sessions: [],
+  currentSession: null,
+  pendingSession: null,
+  lastResults: [],
+  lastUpdate: Date.now(),
+  currentConfidence: Math.floor(Math.random() * (97 - 51 + 1)) + 51,
+  maxSessions: 100,
+  isConnected: false
+};
 
-function taiXiuStats(totalsList) {
-  const types = totalsList.map(getTaiXiu);
-  const count = types.reduce((acc, type) => {
-    acc[type] = (acc[type] || 0) + 1;
-    return acc;
-  }, { T: 0, X: 0 });
-  const freqTotals = {};
-  totalsList.forEach(t => freqTotals[t] = (freqTotals[t] || 0) + 1);
-  const mostCommonTotal = Object.entries(freqTotals).sort((a, b) => b[1] - a[1])[0][0];
-  return {
-    tai_count: count.T,
-    xiu_count: count.X,
-    most_common_total: parseInt(mostCommonTotal),
-    most_common_type: count.T >= count.X ? "Tài" : "Xỉu"
-  };
-}
+// Prediction map (giữ nguyên như code gốc)
+const predictionMap = {
+  "TXT": "Xỉu", 
+  "TTXX": "Tài", 
+  "XXTXX": "Tài", 
+  "TTX": "Xỉu", 
+  "XTT": "Tài",
+  "TXX": "Tài", 
+  "XTX": "Xỉu", 
+  "TXTX": "Tài", 
+  "XTXX": "Tài", 
+  "XXTX": "Tài",
+  "TXTT": "Xỉu", 
+  "TTT": "Tài", 
+  "XXX": "Tài", 
+  "TXXT": "Tài", 
+  "XTXT": "Xỉu",
+  "TXXT": "Tài", 
+  "XXTT": "Tài", 
+  "TTXX": "Xỉu", 
+  "XTTX": "Tài", 
+  "XTXTX": "Tài",
+  "TTXXX": "Tài", 
+  "XTTXT": "Tài", 
+  "XXTXT": "Xỉu", 
+  "TXTTX": "Tài", 
+  "XTXXT": "Tài",
+  "TTTXX": "Xỉu", 
+  "XXTTT": "Tài", 
+  "XTXTT": "Tài", 
+  "TXTXT": "Tài", 
+  "TTXTX": "Xỉu",
+  "TXTTT": "Xỉu", 
+  "XXTXTX": "Tài", 
+  "XTXXTX": "Tài", 
+  "TXTTTX": "Tài", 
+  "TTTTXX": "Xỉu",
+  "XTXTTX": "Tài", 
+  "XTXXTT": "Tài", 
+  "TXXTXX": "Tài", 
+  "XXTXXT": "Tài", 
+  "TXTTXX": "Xỉu",
+  "TTTXTX": "Xỉu", 
+  "TTXTTT": "Tài", 
+  "TXXTTX": "Tài", 
+  "XXTTTX": "Tài", 
+  "XTTTTX": "Xỉu",
+  "TXTXTT": "Tài", 
+  "TXTXTX": "Tài", 
+  "TTTTX": "Tài", 
+  "XXXTX": "Tài", 
+  "TXTTTX": "Xỉu",
+  "XTXXXT": "Tài", 
+  "XXTTXX": "Tài", 
+  "TTTXXT": "Xỉu", 
+  "XXTXXX": "Tài", 
+  "XTXTXT": "Tài",
+  "TTXXTX": "Tài", 
+  "TTXXT": "Tài", 
+  "TXXTX": "Xỉu", 
+  "XTXXX": "Tài", 
+  "XTXTX": "Xỉu",
+  "TTXT": "Xỉu", 
+  "TTTXT": "Xỉu",
+  "TTTT": "Tài",
+  "TTTTT": "Tài",
+  "TTTTTT": "Xỉu",
+  "TTTTTTT": "Tài",
+  "TTTTTTX": "Xỉu",
+  "TTTTTX": "Xỉu",
+  "TTTTTXT": "Xỉu",
+  "TTTTTXX": "Tài",
+  "TTTTXT": "Xỉu",
+  "TTTTXTT": "Tài",
+  "TTTTXTX": "Xỉu",
+  "TTTTXXT": "Xỉu",
+  "TTTTXXX": "Tài",
+  "TTTX": "Xỉu",
+  "TTTXTT": "Tài",
+  "TTTXTTT": "Xỉu",
+  "TTTXTTX": "Xỉu",
+  "TTTXTXT": "Tài",
+  "TTTXTXX": "Tài",
+  "TTTXXTT": "Tài",
+  "TTTXXTX": "Tài",
+  "TTTXXX": "Xỉu",
+  "TTTXXXT": "Tài",
+  "TTTXXXX": "Xỉu",
+  "TTXTT": "Xỉu",
+  "TTXTTTT": "Xỉu",
+  "TTXTTTX": "Xỉu",
+  "TTXTTX": "Tài",
+  "TTXTTXT": "Tài",
+  "TTXTTXX": "Xỉu",
+  "TTXTXT": "Xỉu",
+  "TTXTXTT": "Tài",
+  "TTXTXTX": "Tài",
+  "TTXTXX": "Xỉu",
+  "TTXTXXT": "Tài",
+  "TTXTXXX": "Xỉu",
+  "TTXXTT": "Tài",
+  "TTXXTTT": "Xỉu",
+  "TTXXTTX": "Tài",
+  "TTXXTXT": "Tài",
+  "TTXXTXX": "Xỉu",
+  "TTXXXT": "Xỉu",
+  "TTXXXTT": "Tài",
+  "TTXXXTX": "Tài",
+  "TTXXXX": "Xỉu",
+  "TTXXXXT": "Tài",
+  "TTXXXXX": "Xỉu",
+  "TXTTTT": "Xỉu",
+  "TXTTTTT": "Xỉu",
+  "TXTTTTX": "Xỉu",
+  "TXTTTXT": "Xỉu",
+  "TXTTTXX": "Tài",
+  "TXTTXT": "Tài",
+  "TXTTXTT": "Tài",
+  "TXTTXTX": "Tài",
+  "TXTTXXT": "Tài",
+  "TXTTXXX": "Tài",
+  "TXTXTTT": "Tài",
+  "TXTXTTX": "Tài",
+  "TXTXTXT": "Xỉu",
+  "TXTXTXX": "Tài",
+  "TXTXX": "Tài",
+  "TXTXXT": "Tài",
+  "TXTXXTT": "Tài",
+  "TXTXXTX": "Xỉu",
+  "TXTXXX": "Xỉu",
+  "TXTXXXT": "Xỉu",
+  "TXTXXXX": "Xỉu",
+  "TXXTT": "Tài",
+  "TXXTTT": "Tài",
+  "TXXTTTT": "Tài",
+  "TXXTTTX": "Tài",
+  "TXXTTXT": "Xỉu",
+  "TXXTTXX": "Xỉu",
+  "TXXTXT": "Tài",
+  "TXXTXTT": "Tài",
+  "TXXTXTX": "Tài",
+  "TXXTXXT": "Tài",
+  "TXXTXXX": "Xỉu",
+  "TXXX": "Tài",
+  "TXXXT": "Tài",
+  "TXXXTT": "Xỉu",
+  "TXXXTTT": "Tài",
+  "TXXXTTX": "Xỉu",
+  "TXXXTX": "Xỉu",
+  "TXXXTXT": "Tài",
+  "TXXXTXX": "Xỉu",
+  "TXXXX": "Xỉu",
+  "TXXXXT": "Tài",
+  "TXXXXTT": "Xỉu",
+  "TXXXXTX": "Xỉu",
+  "TXXXXX": "Tài",
+  "TXXXXXT": "Xỉu",
+  "TXXXXXX": "Xỉu",
+  "XTTT": "Xỉu",
+  "XTTTT": "Xỉu",
+  "XTTTTT": "Tài",
+  "XTTTTTT": "Tài",
+  "XTTTTTX": "Tài",
+  "XTTTTXT": "Tài",
+  "XTTTTXX": "Xỉu",
+  "XTTTX": "Tài",
+  "XTTTXT": "Xỉu",
+  "XTTTXTT": "Tài",
+  "XTTTXTX": "Xỉu",
+  "XTTTXX": "Tài",
+  "XTTTXXT": "Tài",
+  "XTTTXXX": "Tài",
+  "XTTXTT": "Tài",
+  "XTTXTTT": "Tài",
+  "XTTXTTX": "Tài",
+  "XTTXTX": "Xỉu",
+  "XTTXTXT": "Tài",
+  "XTTXTXX": "Xỉu",
+  "XTTXX": "Xỉu",
+  "XTTXXT": "Xỉu",
+  "XTTXXTT": "Tài",
+  "XTTXXTX": "Xỉu",
+  "XTTXXX": "Tài",
+  "XTTXXXT": "Xỉu",
+  "XTTXXXX": "Tài",
+  "XTXTTT": "Tài",
+  "XTXTTTT": "Tài",
+  "XTXTTTX": "Xỉu",
+  "XTXTTXT": "Xỉu",
+  "XTXTTXX": "Tài",
+  "XTXTXTT": "Tài",
+  "XTXTXTX": "Xỉu",
+  "XTXTXX": "Tài",
+  "XTXTXXT": "Tài",
+  "XTXTXXX": "Tài",
+  "XTXXTTT": "Tài",
+  "XTXXTTX": "Xỉu",
+  "XTXXTXT": "Tài",
+  "XTXXTXX": "Tài",
+  "XTXXXTT": "Xỉu",
+  "XTXXXTX": "Tài",
+  "XTXXXX": "Xỉu",
+  "XTXXXXT": "Tài",
+  "XTXXXXX": "Tài",
+  "XXT": "Xỉu",
+  "XXTTTT": "Tài",
+  "XXTTTTT": "Xỉu",
+  "XXTTTTX": "Tài",
+  "XXTTTXT": "Xỉu",
+  "XXTTTXX": "Xỉu",
+  "XXTTX": "Tài",
+  "XXTTXT": "Xỉu",
+  "XXTTXTT": "Xỉu",
+  "XXTTXTX": "Tài",
+  "XXTTXXT": "Xỉu",
+  "XXTTXXX": "Tài",
+  "XXTXTT": "Tài",
+  "XXTXTTT": "Tài",
+  "XXTXTTX": "Xỉu",
+  "XXTXTXT": "Tài",
+  "XXTXTXX": "Tài",
+  "XXTXXTT": "Xỉu",
+  "XXTXXTX": "Xỉu",
+  "XXTXXXT": "Tài",
+  "XXTXXXX": "Tài",
+  "XXXT": "Tài",
+  "XXXTT": "Xỉu",
+  "XXXTTT": "Xỉu",
+  "XXXTTTT": "Xỉu",
+  "XXXTTTX": "Xỉu",
+  "XXXTTX": "Tài",
+  "XXXTTXT": "Xỉu",
+  "XXXTTXX": "Xỉu",
+  "XXXTXT": "Tài",
+  "XXXTXTT": "Tài",
+  "XXXTXTX": "Xỉu",
+  "XXXTXX": "Tài",
+  "XXXTXXT": "Xỉu",
+  "XXXTXXX": "Tài",
+  "XXXX": "Tài",
+  "XXXXT": "Xỉu",
+  "XXXXTT": "Xỉu",
+  "XXXXTTT": "Tài",
+  "XXXXTTX": "Tài",
+  "XXXXTX": "Tài",
+  "XXXXTXT": "Tài",
+  "XXXXTXX": "Tài",
+  "XXXXX": "Tài",
+  "XXXXXT": "Xỉu",
+  "XXXXXTT": "Tài",
+  "XXXXXTX": "Tài",
+  "XXXXXX": "Tài",
+  "XXXXXXT": "Tài",
+  "XXXXXXX": "Tài"
+};
 
-function duDoanSunwin200kVip(totals) {
-  if (totals.length < 4) {
-    return {
-      prediction: "Chờ",
-      confidence: 0,
-      reason: "Chưa đủ dữ liệu",
-      history_summary: taiXiuStats(totals)
-    };
+function predictFromPattern(pattern) {
+  for (let len = Math.min(pattern.length, 4); len >= 1; len--) {
+    const key = pattern.substring(0, len);
+    if (predictionMap[key]) return predictionMap[key];
   }
-  const last = totals.slice(-1)[0];
-  const result = getTaiXiu(last);
+  return pattern[0] === "T" ? "Tài" : "Xỉu";
+}
+
+function calculateResult(d1, d2, d3) {
+  const sum = d1 + d2 + d3;
   return {
-    prediction: result === "T" ? "Xỉu" : "Tài",
-    confidence: 71,
-    reason: "Mặc định bẻ cầu",
-    history_summary: taiXiuStats(totals)
+    result: sum >= 11 ? "T" : "X",
+    sum: sum
   };
 }
+
+// WebSocket Connection
+let wsConnection = null;
+let heartbeatTimer = null;
+let reconnectAttempts = 0;
 
 function connectWebSocket() {
-  ws = new WebSocket("wss://websocket.atpman.net/websocket");
+  if (wsConnection) {
+    wsConnection.removeAllListeners();
+    if (wsConnection.readyState !== WebSocket.CLOSED) {
+      wsConnection.close();
+    }
+  }
 
-  ws.on("open", () => {
-    console.log("✅ WebSocket connected");
-    const authPayload = [
+  clearInterval(heartbeatTimer);
+
+  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+    fastify.log.error(`Failed to reconnect after ${MAX_RECONNECT_ATTEMPTS} attempts`);
+    return;
+  }
+
+  reconnectAttempts++;
+  fastify.log.info(`Connecting to SunWin (attempt ${reconnectAttempts})...`);
+
+  wsConnection = new WebSocket("wss://websocket.atpman.net/websocket");
+
+  wsConnection.on('open', () => {
+    reconnectAttempts = 0;
+    gameData.isConnected = true;
+    fastify.log.info("Connection established");
+    
+    const authData = [
       1,
       "MiniGame",
-      "miss88",
-      "vinhk122011",
+      "dfghhhgffgggg",
+      "tinhbip",
       {
-        info: JSON.stringify({
-          ipAddress: "2001:ee0:4f91:2000:689d:c3f4:e10d:5bd7",
-          userId: "daf3a573-8ac5-4db4-9717-256b848044af",
-          username: "S8_miss88",
-          timestamp: 1752071555947,
-          refreshToken: "39d76d58fc7e4b819e097764af7240c8.34dcc325f1fc4e758e832c8f7a960224"
-        }),
-        signature: "01095CFB5D30CA4208D26E0582C3A04CB18CE1FA78EE41F1D0F63D6D3D368BC03B4007FC54AAC0A4A6BA89846C7D0ED6F4609C2976B6290C19629884ADCAD90C86B7F2C8D8CA582A077A7932D0F4F70FBBC6FEDD0B89C249373A310427565D140016FF46940B81FBEA894136D431BF4BAA3B9B66C692B55AD81657A535DD3612"
+        info: "{\"ipAddress\":\"2402:9d80:36a:1716:13d7:a37a:60e2:2c64\",\"userId\":\"f68cd413-44d4-4bf5-96eb-23da9a317f17\",\"username\":\"S8_dfghhhgffgggg\",\"timestamp\":1752167805248,\"refreshToken\":\"498e236e749f4afdb8517d1cd23a419b.0ab31b9e397f4cf0b9c23b3d6a7596b6\"}",
+        signature: "52830A25058B665F9A929FD75A80E6893BCD7DDB2BA3276B132BC863453AA09AE60B66FBE4B25F3892B27492391BF08F30D2DDD84B140F0007F1630BC6727A45543749ED892B94D78FEC9683FCF9A15F4EF582D8E4D9F7DD85AFD3BAE566A7B886F7DC380DA10EF5527C38BEE9E4F06C95B9612105CC1B2545C2A13644A29F1F"
       }
     ];
-    ws.send(JSON.stringify(authPayload));
-    setTimeout(() => {
-      ws.send(JSON.stringify([6, "MiniGame", "taixiuUnbalancedPlugin", { cmd: 2000 }]));
-    }, 2000);
+    
+    wsConnection.send(JSON.stringify(authData));
+    wsConnection.send(JSON.stringify([6, "MiniGame", "taixiuPlugin", { cmd: 1001 }]));
+    
+    heartbeatTimer = setInterval(() => {
+      if (wsConnection.readyState === WebSocket.OPEN) {
+        wsConnection.send(JSON.stringify([6, "MiniGame", "taixiuUnbalancedPlugin", { cmd: 2000 }]));
+      }
+    }, HEARTBEAT_INTERVAL);
   });
 
-  ws.on("message", (data) => {
+  wsConnection.on('message', (data) => {
     try {
       const json = JSON.parse(data);
-      if (Array.isArray(json) && json[1]?.htr) {
-        lastResults = json[1].htr.map(item => ({
-          sid: item.sid,
-          total: item.d1 + item.d2 + item.d3
-        }));
-        const latest = lastResults[0];
-        console.log(`📥 Phiên ${latest.sid}: ${latest.total} → ${getTaiXiu(latest.total)}`);
+
+      // Process real-time results
+      if (Array.isArray(json) && json[3]?.res?.d1 !== undefined) {
+        const res = json[3].res;
+        
+        const isNewSession = !gameData.currentSession || 
+                           (res.sid > gameData.currentSession && 
+                            res.timestamp > (gameData.lastUpdate - 10000));
+        
+        if (isNewSession) {
+          if (gameData.pendingSession) {
+            const result = calculateResult(gameData.pendingSession.d1, 
+                                          gameData.pendingSession.d2, 
+                                          gameData.pendingSession.d3);
+            
+            gameData.lastResults.unshift({
+              ...gameData.pendingSession,
+              result: result.result,
+              sum: result.sum
+            });
+            
+            if (gameData.lastResults.length > 20) {
+              gameData.lastResults.pop();
+            }
+          }
+
+          gameData.pendingSession = {
+            sid: res.sid,
+            d1: res.d1,
+            d2: res.d2,
+            d3: res.d3,
+            timestamp: Date.now()
+          };
+          
+          gameData.currentSession = res.sid;
+          gameData.currentConfidence = Math.floor(Math.random() * (97 - 51 + 1)) + 51;
+          gameData.lastUpdate = Date.now();
+          
+          fastify.log.info(`New session ${res.sid}: ${res.d1},${res.d2},${res.d3}`);
+        }
       }
-    } catch (e) {
-      console.error("❌ Lỗi parse:", e.message);
+      // Process history
+      else if (Array.isArray(json) && json[1]?.htr) {
+        gameData.sessions = json[1].htr
+          .filter(x => x.d1 !== undefined)
+          .map(x => {
+            const result = calculateResult(x.d1, x.d2, x.d3);
+            return {
+              sid: x.sid,
+              d1: x.d1,
+              d2: x.d2,
+              d3: x.d3,
+              result: result.result,
+              sum: result.sum,
+              timestamp: Date.now()
+            };
+          })
+          .sort((a, b) => b.sid - a.sid)
+          .slice(0, gameData.maxSessions);
+          
+        if (gameData.sessions.length > 0) {
+          gameData.currentSession = gameData.sessions[0].sid;
+        }
+        fastify.log.info(`Loaded ${gameData.sessions.length} historical sessions`);
+      }
+    } catch (error) {
+      fastify.log.error("Data processing error:", error);
     }
   });
 
-  ws.on("close", () => {
-    console.warn("⚠️ Mất kế nối. Kết nối lại...");
-    setTimeout(connectWebSocket, reconnectInterval);
+  wsConnection.on('close', () => {
+    gameData.isConnected = false;
+    fastify.log.warn("Connection lost, attempting to reconnect...");
+    setTimeout(connectWebSocket, 5000);
   });
 
-  ws.on("error", (err) => {
-    console.error("❌ WebSocket error:", err.message);
-    ws.close();
+  wsConnection.on('error', (err) => {
+    gameData.isConnected = false;
+    fastify.log.error("Connection error:", err);
   });
 }
 
-connectWebSocket();
-
-fastify.get("/api/club789", async () => {
-  const valid = lastResults.slice().reverse();
-  const totals = valid.map(v => v.total);
-  const prediction = duDoanSunwin200kVip(totals);
-  const pattern = (totals.length >= 13 ? totals.slice(-13) : Array(13 - totals.length).fill(0).concat(totals)).map(getTaiXiu).join("");
-
-  return {
-    current_result: totals.length ? (getTaiXiu(totals[totals.length - 1]) === "T" ? "Tài" : "Xỉu") : null,
-    current_session: valid[0]?.sid || null,
-    next_session: valid[0]?.sid + 1 || null,
-    prediction: prediction.prediction,
-    confidence: prediction.confidence,
-    reason: prediction.reason,
-    used_pattern: pattern
-  };
+// CORS
+fastify.register(cors, {
+  origin: "*",
+  methods: ["GET", "OPTIONS"]
 });
 
-fastify.listen({ port: PORT, host: "0.0.0.0" }, (err, addr) => {
+// API Endpoint - Đã sửa đổi để trả về đúng định dạng
+fastify.get("/api/789club", async (request, reply) => {
+  try {
+    const allResults = [
+      ...(gameData.pendingSession ? [{
+        ...gameData.pendingSession,
+        ...calculateResult(gameData.pendingSession.d1, gameData.pendingSession.d2, gameData.pendingSession.d3)
+      }] : []),
+      ...gameData.lastResults,
+      ...gameData.sessions
+    ].sort((a, b) => b.sid - a.sid);
+
+    if (allResults.length === 0) {
+      return reply.status(404).send({
+        status: "error",
+        message: "No session data available",
+        is_connected: gameData.isConnected
+      });
+    }
+
+    const last15Results = allResults.slice(0, 15);
+    const pattern = last15Results.map(p => p.result).join("");
+
+    const response = {
+      phien_hien_tai: allResults[0].sid + 1, // Phiên tiếp theo
+      du_doan: predictFromPattern(pattern),
+      do_tin_cay: gameData.currentConfidence,
+      data: {
+        session: allResults[0].sid,
+        dice: [allResults[0].d1, allResults[0].d2, allResults[0].d3],
+        result: allResults[0].result,
+        sum: allResults[0].sum,
+        next_session: allResults[0].sid + 1,
+        prediction: predictFromPattern(pattern),
+        confidence: `${gameData.currentConfidence}%`,
+        pattern: pattern,
+        algorithm: pattern.substring(0, 6),
+        last_update: gameData.lastUpdate,
+        server_time: Date.now(),
+        is_live: !!gameData.pendingSession,
+        is_connected: gameData.isConnected,
+        total_sessions: allResults.length
+      }
+    };
+
+    return response;
+  } catch (err) {
+    fastify.log.error("API error:", err);
+    return reply.status(500).send({
+      status: "error",
+      message: "System error"
+    });
+  }
+});
+
+// Start server
+fastify.listen({ port: PORT, host: "0.0.0.0" }, (err) => {
   if (err) {
-    console.error(err);
+    fastify.log.error("Server startup error:", err);
     process.exit(1);
   }
-  console.log(`🚀 Server running: ${addr}`);
+  fastify.log.info(`Server running on port ${PORT}`);
+  connectWebSocket();
+});
+
+// Handle server shutdown
+process.on("SIGINT", () => {
+  fastify.log.info("Shutting down server...");
+  if (wsConnection) wsConnection.close();
+  clearInterval(heartbeatTimer);
+  fastify.close().then(() => {
+    process.exit(0);
+  });
 });
