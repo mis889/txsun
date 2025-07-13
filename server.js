@@ -35,6 +35,7 @@ function taiXiuStats(totalsList) {
   };
 }
 
+// CÁC RULE DỰ ĐOÁN
 function rule_special_pattern(last4) {
   if (last4[0] === last4[2] && last4[0] === last4[3] && last4[0] !== last4[1]) {
     return {
@@ -62,7 +63,7 @@ function rule_special_numbers(last3, lastResult) {
     return {
       prediction: lastResult === "T" ? "Xỉu" : "Tài",
       confidence: 81,
-      reason: `Xuất hiện ≥2 số đặc biệt ${Array.from(special)} gần nhất. Bẻ cầu!`
+      reason: `Xuất hiện ≥2 số đặc biệt gần nhất. Bẻ cầu!`
     };
   }
 }
@@ -71,7 +72,7 @@ function rule_frequent_repeat(last6, lastTotal) {
   const freq = last6.filter(t => t === lastTotal).length;
   if (freq >= 3) {
     return {
-      prediction: getTaiXiu(lastTotal) === "T" ? "Tài" : "Xỉu",
+      prediction: getTaiXiu(lastTotal),
       confidence: 80,
       reason: `Số ${lastTotal} lặp lại ${freq} lần. Bắt theo nghiêng cầu!`
     };
@@ -133,6 +134,7 @@ function duDoanSunwin200kVip(totals) {
   return result;
 }
 
+// KẾT NỐI WEBSOCKET
 function connectWebSocket() {
   ws = new WebSocket("wss://websocket.atpman.net/websocket");
 
@@ -145,8 +147,8 @@ function connectWebSocket() {
       "miss88",
       "vinhk122011",
       {
-        info: "{\"ipAddress\":\"2001:ee0:4f91:2000:689d:c3f4:e10d:5bd7\",\"userId\":\"daf3a573-8ac5-4db4-9717-256b848044af\",\"username\":\"S8_miss88\",\"timestamp\":1752071555947,\"refreshToken\":\"39d76d58fc7e4b819e097764af7240c8.34dcc325f1fc4e758e832c8f7a960224\"}",
-        signature: "01095CFB5D30CA4208D26E0582C3A04CB18CE1FA78EE41F1D0F63D6D3D368BC03B4007FC54AAC0A4A6BA89846C7D0ED6F4609C2976B6290C19629884ADCAD90C86B7F2C8D8CA582A077A7932D0F4F70FBBC6FEDD0B89C249373A310427565D140016FF46940B81FBEA894136D431BF4BAA3B9B66C692B55AD81657A535DD3612"
+        info: "{\"ipAddress\":\"2001:ee0:4f91:2000:689d:c3f4:e10d:5bd7\",\"userId\":\"daf3a573-8ac5-4db4-9717-256b848044af\",\"username\":\"S8_miss88\",\"timestamp\":1752071555947,\"refreshToken\":\"TOKEN_HERE\"}",
+        signature: "CHUỖI_KÝ_TÊN_RSA_TẠI_ĐÂY"
       }
     ];
 
@@ -176,7 +178,7 @@ function connectWebSocket() {
   });
 
   ws.on("close", () => {
-    console.warn("⚠️ WebSocket bị đóng, thử kết nối lại sau 5 giây...");
+    console.warn("⚠️ WebSocket bị đóng, thử lại sau 5 giây...");
     setTimeout(connectWebSocket, reconnectInterval);
   });
 
@@ -188,6 +190,7 @@ function connectWebSocket() {
 
 connectWebSocket();
 
+// API DỰ ĐOÁN
 fastify.get("/api/club789", async (request, reply) => {
   const valid = lastResults.slice().reverse();
   const totals = valid.map(v => v.total);
@@ -200,7 +203,12 @@ fastify.get("/api/club789", async (request, reply) => {
       used_pattern: ""
     };
   }
+
   const predictionData = duDoanSunwin200kVip(totals);
+  const pattern = (totals.length >= 13
+    ? totals.slice(-13)
+    : Array(13 - totals.length).fill(0).concat(totals)
+  ).map(getTaiXiu).join("");
 
   return {
     current_result: getTaiXiu(totals[totals.length - 1]) === "T" ? "Tài" : "Xỉu",
@@ -209,10 +217,11 @@ fastify.get("/api/club789", async (request, reply) => {
     prediction: predictionData.prediction,
     confidence: predictionData.confidence,
     reason: predictionData.reason,
-    used_pattern: totals.slice(-13).map(getTaiXiu).join("")
+    used_pattern: pattern
   };
 });
 
+// KHỞI ĐỘNG SERVER
 const start = async () => {
   try {
     const address = await fastify.listen({ port: PORT, host: "0.0.0.0" });
