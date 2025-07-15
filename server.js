@@ -11,6 +11,36 @@ let currentSession = null;
 let ws = null;
 let reconnectInterval = 5000;
 
+// === THUẬT TOÁN PHÂN TÍCH ===
+const PATTERN_DATA = {
+  "ttxttx": { tai: 80, xiu: 20 }, "xxttxx": { tai: 20, xiu: 80 },
+  "ttxxtt": { tai: 75, xiu: 25 }, "txtxt": { tai: 60, xiu: 40 },
+  "xtxtx": { tai: 40, xiu: 60 }, "ttx": { tai: 70, xiu: 30 },
+  "xxt": { tai: 30, xiu: 70 }, "txt": { tai: 65, xiu: 35 },
+  "xtx": { tai: 35, xiu: 65 }, "tttt": { tai: 85, xiu: 15 },
+  "xxxx": { tai: 15, xiu: 85 }, "ttttt": { tai: 88, xiu: 12 },
+  "xxxxx": { tai: 12, xiu: 88 }, "tttttt": { tai: 92, xiu: 8 },
+  "xxxxxx": { tai: 8, xiu: 92 }, "tttx": { tai: 75, xiu: 25 },
+  "xxxt": { tai: 25, xiu: 75 }, "ttxxtt": { tai: 80, xiu: 20 },
+  "ttxtx": { tai: 78, xiu: 22 }, "xxtxt": { tai: 22, xiu: 78 },
+  "txtxtx": { tai: 82, xiu: 18 }, "xtxtxt": { tai: 18, xiu: 82 },
+  "ttxtxt": { tai: 85, xiu: 15 }, "xxtxtx": { tai: 15, xiu: 85 },
+  "txtxxt": { tai: 83, xiu: 17 }, "xtxttx": { tai: 17, xiu: 83 },
+  "ttttttt": { tai: 95, xiu: 5 }, "xxxxxxx": { tai: 5, xiu: 95 },
+  "tttttttt": { tai: 97, xiu: 3 }, "xxxxxxxx": { tai: 3, xiu: 97 },
+  "txtx": { tai: 60, xiu: 40 }, "xtxt": { tai: 40, xiu: 60 },
+  "txtxt": { tai: 65, xiu: 35 }, "xtxtx": { tai: 35, xiu: 65 },
+  "txtxtxt": { tai: 70, xiu: 30 }, "xtxtxtx": { tai: 30, xiu: 70 }
+};
+
+const SUNWIN_ALGORITHM = {
+  "3-10": { tai: 0, xiu: 100 }, "11": { tai: 10, xiu: 90 },
+  "12": { tai: 20, xiu: 80 }, "13": { tai: 35, xiu: 65 },
+  "14": { tai: 45, xiu: 55 }, "15": { tai: 65, xiu: 35 },
+  "16": { tai: 80, xiu: 20 }, "17": { tai: 90, xiu: 10 },
+  "18": { tai: 100, xiu: 0 }
+};
+
 function connectWebSocket() {
   ws = new WebSocket("wss://websocket.atpman.net/websocket");
 
@@ -31,7 +61,6 @@ function connectWebSocket() {
     ws.send(JSON.stringify(authPayload));
     console.log("🔐 Đã gửi payload xác thực");
 
-    // Gửi lệnh lấy kết quả xúc xắc sau 2 giây
     setTimeout(() => {
       const dicePayload = [
         6,
@@ -62,9 +91,7 @@ function connectWebSocket() {
 
         console.log(`📥 Phiên ${currentSession}: ${latest.d1} + ${latest.d2} + ${latest.d3} = ${total} → ${currentResult}`);
       }
-    } catch (e) {
-      // Không log lỗi nhỏ để tránh spam
-    }
+    } catch (e) {}
   });
 
   ws.on("close", () => {
@@ -91,31 +118,46 @@ fastify.get("/api/club789", async (request, reply) => {
       current_session: null,
       next_session: null,
       prediction: null,
+      confidence: 0,
       used_pattern: ""
     };
   }
+
+  const pattern = validResults
+    .slice(0, 13)
+    .map(item => {
+      const sum = item.d1 + item.d2 + item.d3;
+      return sum >= 11 ? "t" : "x";
+    })
+    .reverse()
+    .join("");
 
   const current = validResults[0];
   const total = current.d1 + current.d2 + current.d3;
   const result = total >= 11 ? "Tài" : "Xỉu";
   const currentSession = current.sid;
   const nextSession = currentSession + 1;
-  const prediction = result === "Tài" ? "Xỉu" : "Tài";
 
-  const pattern = validResults
-    .slice(0, 6)
-    .map(item => {
-      const sum = item.d1 + item.d2 + item.d3;
-      return sum >= 11 ? "T" : "X";
-    })
-    .reverse()
-    .join("");
+  // === Dự đoán theo pattern
+  let prediction = "Chờ";
+  let confidence = 0;
+
+  for (let len = 13; len >= 3; len--) {
+    const sub = pattern.slice(-len);
+    if (PATTERN_DATA[sub]) {
+      const { tai, xiu } = PATTERN_DATA[sub];
+      prediction = tai > xiu ? "Tài" : "Xỉu";
+      confidence = Math.max(tai, xiu);
+      break;
+    }
+  }
 
   return {
     current_result: result,
     current_session: currentSession,
     next_session: nextSession,
-    prediction: prediction,
+    prediction,
+    confidence,
     used_pattern: pattern
   };
 });
