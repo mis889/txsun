@@ -289,17 +289,23 @@ function connectWebSocket() {
     console.log("✅ Đã kết nối WebSocket");
 
     const authPayload = [
-      1, "MiniGame", "miss88", "vinhk122011",
+      1,
+      "MiniGame",
+      "miss88",
+      "vinhk122011",
       {
-        info: "{\"ipAddress\":\"2001:ee0:4f91:2000:2976:40a9:174c:9782\",\"wsToken\":\"ey...\",\"locale\":\"vi\",\"userId\":\"daf...\",\"username\":\"S8_miss88\",\"timestamp\":1753334845240}",
-        signature: "83FBD3...49"
+        info: "{\"ipAddress\":\"2001:ee0:4f91:2000:2976:40a9:174c:9782\",\"wsToken\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJnZW5kZXIiOjAsImNhblZpZXdTdGF0IjpmYWxzZSwiZGlzcGxheU5hbWUiOiJuZ3Zpbmg3OCIsImJvdCI6MCwiaXNNZXJjaGFudCI6ZmFsc2UsInZlcmlmaWVkQmFua0FjY291bnQiOmZhbHNlLCJwbGF5RXZlbnRMb2JieSI6ZmFsc2UsImN1c3RvbWVySWQiOjU1OTEzNjU3LCJhZmZJZCI6ImRhZjNhNTczLThhYzUtNGRiNC05NzE3LTI1NmI4NDgwNDRhZiIsImJhbm5lZCI6ZmFsc2UsImJyYW5kIjoiNzg5LmNsdWIiLCJ0aW1lc3RhbXAiOjE3NTMzMzQ4NDUyMzksImxvY2tHYW1lcyI6W10sImFtb3VudCI6MCwibG9ja0NoYXQiOmZhbHNlLCJwaG9uZVZlcmlmaWVkIjp0cnVlLCJpcEFkZHJlc3MiOiIyMDAxOmVlMDo0ZjkxOjIwMDA6Mjk3Njo0MGE5OjE3NGM6OTc4MiIsIm11dGUiOmZhbHNlLCJhdmF0YXIiOiJodHRwczovL2FwaS54ZXVpLmlvL2ltYWdlcy9hdmF0YXIvYXZhdGFyXzIxLnBuZyIsInBsYXRmb3JtSWQiOjUsInVzZXJJZCI6ImRhZjNhNTczLThhYzUtNGRiNC05NzE3LTI1NmI4NDgwNDRhZiIsInJlZ1RpbWUiOjE3NDYyNzE2MzcxNjAsInBob25lIjoiODQzMzY1NjY3OTIiLCJkZXBvc2l0Ijp0cnVlLCJ1c2VybmFtZSI6IlM4X21pc3M4OCJ9.cVIcWfL4naCvP73AhBERACHT7oa2WzdR82pKpzHBkrU\",\"locale\":\"vi\",\"userId\":\"daf3a573-8ac5-4db4-9717-256b848044af\",\"username\":\"S8_miss88\",\"timestamp\":1753334845240,\"refreshToken\":\"86dffcb769774dc6955d3656ba26507b.6e662025988b4ca284088e8eaeb4c23c\"}",
+        signature: "83FBD39772D7003D66D73FD5BB59DE9605CA80DC67918642B96DFA71E074A7F486B36843557D6BEBED03D61EB700025F48002752D57AB540BECC6075A8026438875C13CE95164EE0856905411A1D8B5C971D589A0D3630908C3D42726D59AF5977451C2DBBDA577DAEF3AA07CB881A1A096D817108D331237EA358FD5DC52849"
       }
     ];
 
     ws.send(JSON.stringify(authPayload));
+    console.log("🔐 Đã gửi payload xác thực");
+
     setTimeout(() => {
       const dicePayload = [6, "MiniGame", "taixiuUnbalancedPlugin", { cmd: 2000 }];
       ws.send(JSON.stringify(dicePayload));
+      console.log("🎲 Đã gửi lệnh lấy kết quả xúc xắc (cmd: 2000)");
     }, 2000);
   });
 
@@ -314,7 +320,7 @@ function connectWebSocket() {
           d3: item.d3
         })).sort((a, b) => b.sid - a.sid);
         currentSession = lastResults[0]?.sid || null;
-        console.log("📥 Cập nhật dữ liệu phiên:", currentSession);
+        console.log("📥 Cập nhật phiên:", currentSession);
       }
     } catch (e) {}
   });
@@ -330,10 +336,8 @@ function connectWebSocket() {
   });
 }
 
-// Khởi tạo WebSocket
 connectWebSocket();
 
-// API trả dữ liệu giống axobantol
 fastify.get("/api/club789", async () => {
   const validResults = lastResults.filter(r => r.d1 && r.d2 && r.d3);
   if (validResults.length < 1) {
@@ -353,7 +357,7 @@ fastify.get("/api/club789", async () => {
   const { du_doan, khop_pattern } = getDuDoanFromPattern(pattern.toUpperCase());
 
   return {
-    id: "@",
+    id: "@club789",
     phien_cu: current.sid,
     ket_qua,
     xuc_xac: `${current.d1},${current.d2},${current.d3}`,
@@ -364,7 +368,6 @@ fastify.get("/api/club789", async () => {
   };
 });
 
-// Start server
 const start = async () => {
   try {
     const address = await fastify.listen({ port: PORT, host: "0.0.0.0" });
